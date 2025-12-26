@@ -2,6 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import LoginPage from './components/LoginPage';
 import Dashboard from './components/Dashboard';
+import { Toaster } from './components/ui/sonner';
+import { NotificationProvider } from './contexts/NotificationContext';
 import { isAuthenticated, removeToken } from './utils/storage';
 import { logout as authLogout, getCurrentUser } from './services/auth/authService';
 import { cleanupAllWebRTCConnections } from './hooks/useWebRTC';
@@ -70,6 +72,9 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#0f1729]">
+      {/* Toast notifications - available throughout the app */}
+      <Toaster theme="dark" />
+      
       {/* Conditional rendering - show login or dashboard based on login state */}
       {!isLoggedIn ? (
         // Show login page if not logged in
@@ -77,8 +82,10 @@ function App() {
           <LoginPage onLogin={handleLogin} />
         </div>
       ) : (
-        // Show dashboard if logged in
+        // Show dashboard if logged in - wrap with NotificationProvider for real-time notifications
+        <NotificationProvider>
         <Dashboard onLogout={handleLogout} currentUser={currentUser} />
+        </NotificationProvider>
       )}
     </div>
   );

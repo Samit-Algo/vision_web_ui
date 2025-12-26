@@ -4,6 +4,7 @@ import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import DashboardContent from './DashboardContent';
 import CameraDetailPage from './CameraDetailPage';
+import EventDetailsPage from './EventDetailsPage';
 import RightChatPane from './RightChatPane';
 import { MessageSquare } from 'lucide-react';
 import { listCameras } from '../services/camera/cameraService';
@@ -24,12 +25,24 @@ function Dashboard({ onLogout, currentUser }) {
   // State to track selected camera (null means show dashboard, camera object means show detail page)
   const [selectedCamera, setSelectedCamera] = useState<CameraResponse | null>(null);
 
-  // Load camera from URL on mount and when URL changes
+  // State to track selected event (null means show dashboard/camera, eventId means show event details)
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+
+  // Load camera/event from URL on mount and when URL changes
   useEffect(() => {
-    const loadCameraFromURL = async () => {
+    const loadFromURL = async () => {
       const urlParams = new URLSearchParams(window.location.search);
       const cameraId = urlParams.get('camera');
+      const eventId = urlParams.get('event');
       
+      // Handle event navigation
+      if (eventId) {
+        setSelectedEventId(eventId);
+        setSelectedCamera(null); // Clear camera when viewing event
+        return;
+      }
+      
+      // Handle camera navigation
       if (cameraId) {
         // Fetch cameras and find the one matching the ID
         const result = await listCameras();
@@ -42,22 +55,24 @@ function Dashboard({ onLogout, currentUser }) {
               location: camera.device_id || 'Unknown Location',
             } as CameraResponse & { location: string };
             setSelectedCamera(cameraWithLocation);
+            setSelectedEventId(null); // Clear event when viewing camera
           } else {
             // Camera not found, remove from URL
-            updateURL(null);
+            updateURL(null, null);
           }
         }
       } else {
-        // No camera in URL, ensure state is cleared
+        // No camera or event in URL, ensure state is cleared
         setSelectedCamera(null);
+        setSelectedEventId(null);
       }
     };
 
-    loadCameraFromURL();
+    loadFromURL();
     
     // Listen for browser back/forward navigation
     const handlePopState = () => {
-      loadCameraFromURL();
+      loadFromURL();
     };
     
     window.addEventListener('popstate', handlePopState);
@@ -65,13 +80,20 @@ function Dashboard({ onLogout, currentUser }) {
   }, []);
 
   // Helper function to update URL without page reload
-  const updateURL = (cameraId: string | null) => {
+  const updateURL = (cameraId: string | null, eventId: string | null = null) => {
     const url = new URL(window.location.href);
-    if (cameraId) {
+    
+    // Clear all params first
+    url.searchParams.delete('camera');
+    url.searchParams.delete('event');
+    
+    // Set new params
+    if (eventId) {
+      url.searchParams.set('event', eventId);
+    } else if (cameraId) {
       url.searchParams.set('camera', cameraId);
-    } else {
-      url.searchParams.delete('camera');
     }
+    
     window.history.pushState({}, '', url.toString());
   };
 
@@ -106,13 +128,22 @@ function Dashboard({ onLogout, currentUser }) {
     } as CameraResponse & { location: string };
     
     setSelectedCamera(cameraWithLocation);
-    updateURL(camera.id); // Update URL with camera ID
+    setSelectedEventId(null); // Clear event when viewing camera
+    updateURL(camera.id, null); // Update URL with camera ID
+  };
+
+  // Function to handle event click from notifications
+  const handleEventClick = (eventId: string) => {
+    setSelectedEventId(eventId);
+    setSelectedCamera(null); // Clear camera when viewing event
+    updateURL(null, eventId); // Update URL with event ID
   };
 
   // Function to go back to dashboard
   const handleBackToDashboard = () => {
     setSelectedCamera(null);
-    updateURL(null); // Clear camera from URL
+    setSelectedEventId(null);
+    updateURL(null, null); // Clear camera and event from URL
   };
 
   // Function to toggle right chat pane
@@ -132,6 +163,8 @@ function Dashboard({ onLogout, currentUser }) {
       case 'navigate':
         if (command.value === 'dashboard') {
           setSelectedCamera(null);
+          setSelectedEventId(null);
+          updateURL(null, null);
         }
         break;
       case 'sidebar':
@@ -201,6 +234,7 @@ function Dashboard({ onLogout, currentUser }) {
         direction={direction}
         onChangeDirection={changeDirection}
         currentUser={currentUser}
+        onEventClick={handleEventClick}
       />
       
       {/* Content area - Sidebar, Main content, and Right Chat Pane */}
@@ -211,8 +245,16 @@ function Dashboard({ onLogout, currentUser }) {
         
         {/* Main content area */}
         <main className={`flex-1 ${theme === 'dark' ? 'bg-[#0f1729]' : 'bg-white'}`} style={mainContentStyles}>
-          {/* Smooth transition between dashboard and camera detail page */}
-          {selectedCamera ? (
+          {/* Smooth transition between dashboard, camera detail page, and event detail page */}
+          {selectedEventId ? (
+            <div className="h-full">
+              <EventDetailsPage 
+                eventId={selectedEventId} 
+                theme={theme} 
+                onBack={handleBackToDashboard}
+              />
+            </div>
+          ) : selectedCamera ? (
             <div className="h-full p-6">
               <CameraDetailPage 
                 camera={selectedCamera} 

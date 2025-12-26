@@ -5,6 +5,7 @@ import { Resizable } from 're-resizable';
 import AgentChatbot, { type AgentChatbotRef } from './AgentChatbot';
 import ZoneDrawingPanel from './ZoneDrawingPanel';
 import ZoneOverlay from './ZoneOverlay';
+import TimelineChart from './TimelineChart';
 import { useWebRTC } from '../hooks/useWebRTC';
 import type { StreamConfig, WebRTCConfig } from '../types/cameraTypes';
 import { listAgentsByCamera } from '../services/agent/agentService';
@@ -183,7 +184,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
   // State for zone drawing mode
   const [isZoneDrawingMode, setIsZoneDrawingMode] = useState(false);
   const [pendingZoneName, setPendingZoneName] = useState('');
-  const [pendingAgentId, setPendingAgentId] = useState(null);
+  const [pendingAgentId, setPendingAgentId] = useState<string | number | null>(null);
   
   // State for panel widths (in pixels)
   const [leftPanelWidth, setLeftPanelWidth] = useState(240);
@@ -216,9 +217,9 @@ function CameraDetailPage({ camera, theme, onBack }) {
   };
   
   // Function to initiate zone drawing (called from chatbot)
-  const startZoneDrawing = (zoneName, agentId = null) => {
+  const startZoneDrawing = (zoneName: string, agentId?: string | null) => {
     setPendingZoneName(zoneName);
-    setPendingAgentId(agentId);
+    setPendingAgentId(agentId || null);
     setIsZoneDrawingMode(true);
   };
   
@@ -505,32 +506,8 @@ function CameraDetailPage({ camera, theme, onBack }) {
                         : 'bg-white border border-gray-200'
                     }`}
                   >
-                    {/* Camera info header */}
-                    <div className="p-4 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/20">
-                          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                          <span className="text-red-500 text-xs">LIVE</span>
-                        </div>
-                        <div>
-                          <h2 className={`text-sm ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
-                            {getStreamLabel()}
-                          </h2>
-                          <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                            <MapPin className="w-3 h-3" />
-                            <span>{camera.location}</span>
-                            {selectedAgent && (
-                              <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/20 text-blue-500 text-xs">
-                                Agent Stream
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Video player - fills remaining space, scales properly */}
-                    <div className="flex-1 bg-gray-900 relative overflow-hidden">
+                    {/* Video player - full width with overlay header */}
+                    <div className="flex-1 bg-gray-900 relative overflow-hidden min-h-0">
                       {useWebRTCStream ? (
                         <>
                           <video
@@ -582,7 +559,39 @@ function CameraDetailPage({ camera, theme, onBack }) {
                           </span>
                         </div>
                       )}
+                      
+                      {/* Camera info header overlay */}
+                      <div className="absolute top-0 left-0 right-0 p-4 z-20 pointer-events-none">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3 pointer-events-auto">
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-sm">
+                              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                              <span className="text-red-500 text-xs font-medium">LIVE</span>
+                            </div>
+                            <div className="px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur-sm">
+                              <h2 className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-white'}`}>
+                                {getStreamLabel()}
+                              </h2>
+                              <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-200'}`}>
+                                <MapPin className="w-3 h-3" />
+                                <span>{camera.location}</span>
+                                {selectedAgent && (
+                                  <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/30 text-blue-300 text-xs">
+                                    Agent Stream
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
                       {displayZone && <ZoneOverlay zone={displayZone} />}
+                    </div>
+                    
+                    {/* Timeline Chart - below video */}
+                    <div className="flex-shrink-0 mt-2">
+                      <TimelineChart theme={theme} />
                     </div>
                   </div>
                 )}
@@ -737,37 +746,13 @@ function CameraDetailPage({ camera, theme, onBack }) {
                     : 'bg-white border border-gray-200'
                 }`}
               >
-                {/* Camera info header */}
-                <div className="p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/20">
-                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                      <span className="text-red-500 text-xs">LIVE</span>
-                    </div>
-                    <div>
-                      <h2 className={`text-sm ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
-                        {getStreamLabel()}
-                      </h2>
-                      <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                        <MapPin className="w-3 h-3" />
-                        <span>{camera.location}</span>
-                        {selectedAgent && (
-                          <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/20 text-blue-500 text-xs">
-                            Agent Stream
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Video player - fills remaining space */}
-                <div className="flex-1 bg-gray-900 relative overflow-hidden">
+                {/* Video player - full width with overlay header */}
+                <div className="flex-1 bg-gray-900 relative overflow-hidden min-h-0">
                   {useWebRTCStream ? (
                     <>
                       <video
                         ref={webrtc.videoRef}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-contain"
                         autoPlay
                         muted
                         playsInline
@@ -794,7 +779,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
                     </>
                   ) : camera?.stream_url && camera.stream_url.trim() !== '' ? (
                     <video
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain"
                       autoPlay
                       loop
                       muted
@@ -819,7 +804,39 @@ function CameraDetailPage({ camera, theme, onBack }) {
                       )}
                     </div>
                   )}
+                  
+                  {/* Camera info header overlay */}
+                  <div className="absolute top-0 left-0 right-0 p-4 z-20 pointer-events-none">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 pointer-events-auto">
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-sm">
+                          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                          <span className="text-red-500 text-xs font-medium">LIVE</span>
+                        </div>
+                        <div className="px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur-sm">
+                          <h2 className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-white'}`}>
+                            {getStreamLabel()}
+                          </h2>
+                          <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-200'}`}>
+                            <MapPin className="w-3 h-3" />
+                            <span>{camera.location}</span>
+                            {selectedAgent && (
+                              <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/30 text-blue-300 text-xs">
+                                Agent Stream
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
                   {displayZone && <ZoneOverlay zone={displayZone} />}
+                </div>
+                
+                {/* Timeline Chart - below video */}
+                <div className="flex-shrink-0 mt-2">
+                  <TimelineChart theme={theme} />
                 </div>
               </div>
             </div>

@@ -29,6 +29,10 @@ export const apiEndpoints = {
     agentChat: '/api/v1/chat/agent_chat',  // Legacy agent creation chat endpoint (for zone functionality)
     generalChat: '/api/v1/general-chat/message',  // General chat endpoint for side chat
   },
+  // Notification endpoints
+  notifications: {
+    websocket: '/api/v1/notifications/ws',  // WebSocket endpoint for real-time notifications
+  },
   // Add more endpoint groups here as your app grows
   // users: {
   //   getProfile: '/api/v1/users/profile',
