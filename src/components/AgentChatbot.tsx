@@ -104,6 +104,7 @@ const AgentChatbot = forwardRef<AgentChatbotRef, AgentChatbotProps>(
         const request: ChatMessageRequest = {
           message: message.trim(),
           session_id: sessionId || undefined,
+          camera_id: cameraId || undefined, // Include camera_id in all requests
           zone_data: zoneData, // Include zone data if available
         };
 

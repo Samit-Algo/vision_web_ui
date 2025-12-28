@@ -13,6 +13,8 @@ interface UseWebRTCReturn {
   error: string | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   reconnect: () => void;
+  connect: () => void;
+  disconnect: () => void;
 }
 
 // Global connection store - persists connections across component unmounts
@@ -40,8 +42,8 @@ const connectionStore = new Map<string, {
  */
 export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWebRTCReturn {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const storeKey = cameraId || 'temp';
-  const isPersistent = !!cameraId;
+  const storeKey = config?.viewer_id || cameraId || 'temp';
+  const isPersistent = !!(cameraId || config?.viewer_id);
   
   // Get or create store entry
   const getStoreEntry = useCallback(() => {
@@ -176,9 +178,9 @@ export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWe
   }, [config?.viewer_id]);
 
   // Cleanup function - only cleanup if not persistent
-  const cleanup = useCallback(() => {
+  const cleanup = useCallback((force?: boolean) => {
     // If persistent connection, don't cleanup - keep alive
-    if (isPersistent) {
+    if (isPersistent && !force) {
       log(`🔒 Keeping connection alive for camera: ${cameraId}`);
       isMountedRef.current = false;
       return;
@@ -255,8 +257,15 @@ export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWe
 
     // Convert ICE servers to RTCConfiguration format
     // Handle both string and array of strings for urls
+    // WebRTC accepts both string | string[] for urls, so we can pass as-is
+
+    //======================================================================
+    //======================================================================
+
+
+    ///======================================================================
     const iceServers: RTCIceServer[] = config.ice_servers.map(server => ({
-      urls: Array.isArray(server.urls) ? server.urls : server.urls,
+      urls: server.urls, // WebRTC API accepts both string and string[]
       ...(server.username && { username: server.username }),
       ...(server.credential && { credential: server.credential }),
     }));
@@ -422,7 +431,7 @@ export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWe
 
     pc.ontrack = (event) => {
       if (!isMountedRef.current) return;
-      
+
       const trackId = event.track.id || event.track.label || `track-${Date.now()}`;
       log(`📹 Received track: ${trackId} (${event.track.kind})`);
       console.log(`[WebRTC] Track Details:`, {
@@ -435,23 +444,32 @@ export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWe
         streams: event.streams.length,
       });
 
-      // Create or get MediaStream for this track
-      let stream = videoTracksRef.current.get(trackId);
-      
-      if (!stream) {
-        stream = new MediaStream();
-        videoTracksRef.current.set(trackId, stream);
-        log(`📺 Created new MediaStream for track: ${trackId}`);
-      }
+      // Prefer the publisher-provided MediaStream (contains both audio and video when available)
+      const incomingStream = event.streams && event.streams[0] ? event.streams[0] : null;
 
-      // Add track to stream
-      stream.addTrack(event.track);
-      log(`✅ Added track to MediaStream: ${trackId}`);
+      let stream: MediaStream;
+      if (incomingStream) {
+        stream = incomingStream;
+        log(`📺 Using incoming MediaStream from event.streams[0]`);
+      } else {
+        // Fallback: create or reuse a MediaStream per track
+        let trackStream = videoTracksRef.current.get(trackId);
+        if (!trackStream) {
+          trackStream = new MediaStream();
+          videoTracksRef.current.set(trackId, trackStream);
+          log(`📺 Created new fallback MediaStream for track: ${trackId}`);
+        }
+        trackStream.addTrack(event.track);
+        log(`✅ Added track to fallback MediaStream: ${trackId}`);
+        stream = trackStream;
+      }
 
       // Update video element
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        log(`🎬 Setting video srcObject for track: ${trackId}`);
+        if (videoRef.current.srcObject !== stream) {
+          videoRef.current.srcObject = stream;
+        }
+        log(`🎬 Setting video srcObject`);
         videoRef.current.play().then(() => {
           log(`▶️ Video playback started successfully`);
         }).catch(e => {
@@ -812,7 +830,7 @@ export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWe
     if (!isMountedRef.current) return;
     
     log('🔄 Reconnecting...');
-    cleanup();
+    cleanup(true);
     
     setTimeout(() => {
       if (isMountedRef.current && config) {
@@ -821,6 +839,19 @@ export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWe
       }
     }, 500);
   }, [config, cleanup, createPeerConnection, connectSignaling, log]);
+
+  // Explicit connect/disconnect controls (optional use)
+  const connect = useCallback(() => {
+    if (!config) return;
+    if (!pcRef.current) {
+      createPeerConnection();
+    }
+    connectSignaling();
+  }, [config, createPeerConnection, connectSignaling]);
+
+  const disconnect = useCallback(() => {
+    cleanup(true);
+  }, [cleanup]);
 
   // Main effect - initialize connection when config is available
   useEffect(() => {
@@ -912,6 +943,8 @@ export function useWebRTC(config: WebRTCConfig | null, cameraId?: string): UseWe
     error,
     videoRef,
     reconnect,
+    connect,
+    disconnect,
   };
 }
 

@@ -5,7 +5,6 @@ import { Resizable } from 're-resizable';
 import AgentChatbot, { type AgentChatbotRef } from './AgentChatbot';
 import ZoneDrawingPanel from './ZoneDrawingPanel';
 import ZoneOverlay from './ZoneOverlay';
-import TimelineChart from './TimelineChart';
 import { useWebRTC } from '../hooks/useWebRTC';
 import type { StreamConfig, WebRTCConfig } from '../types/cameraTypes';
 import { listAgentsByCamera } from '../services/agent/agentService';
@@ -45,52 +44,122 @@ function CameraDetailPage({ camera, theme, onBack }) {
   // Get the selected agent
   const selectedAgent = agents.find(a => a.id === selectedAgentId);
   
-  // Determine which WebRTC config to use:
-  // - If an agent is selected and has stream_config, use agent's stream_config
-  // - Otherwise, use camera's default stream_config/webrtc_config
-  const getActiveWebRTCConfig = (): WebRTCConfig | null => {
-    if (selectedAgent && selectedAgent.stream_config) {
-      const agentStreamConfig = selectedAgent.stream_config;
+  // Camera WebRTC hook - always active for camera stream
+  // Uses camera's webrtc_config with viewer_id format: viewer:user:camera
+  const cameraWebRTCConfig = webrtcConfig || streamConfig?.webrtc_config || null;
+  const isValidCameraConfig = cameraWebRTCConfig && 
+    cameraWebRTCConfig.signaling_url && 
+    cameraWebRTCConfig.viewer_id && 
+    cameraWebRTCConfig.ice_servers;
+  
+  const cameraWebRTC = useWebRTC(
+    isValidCameraConfig && !selectedAgent ? cameraWebRTCConfig : null,
+    `camera-${camera?.id}`
+  );
+  
+  // Selected agent WebRTC hook - only active when agent is selected
+  // Uses agent's stream_config with viewer_id format: viewer:user:camera:agent
+  const selectedAgentConfig = selectedAgent?.stream_config || null;
+  
+  // Fix viewer_id and signaling_url if missing camera ID (backend bug workaround)
+  // Expected format: viewer:user:camera:agent
+  // Some backends return: viewer:user:agent (missing camera ID)
+  let fixedAgentConfig: WebRTCConfig | null = null;
+  if (selectedAgentConfig && selectedAgent && camera?.id) {
+    const viewerIdParts = selectedAgentConfig.viewer_id.split(':');
+    // Check if viewer_id is missing camera ID (has 3 parts: viewer, user, agent)
+    if (viewerIdParts.length === 3 && viewerIdParts[0] === 'viewer') {
+      // Fix: insert camera ID between user and agent
+      const fixedViewerId = `viewer:${viewerIdParts[1]}:${camera.id}:${viewerIdParts[2]}`;
       
-      // For agents, stream_config is directly a WebRTCConfig object
-      // Check if it has all required fields (signaling_url, viewer_id, ice_servers)
-      if (agentStreamConfig.signaling_url && agentStreamConfig.viewer_id && agentStreamConfig.ice_servers) {
-        console.log(`[CameraDetailPage] ✅ Using agent ${selectedAgent.name} stream config:`, {
-          signaling_url: agentStreamConfig.signaling_url,
-          viewer_id: agentStreamConfig.viewer_id,
-          ice_servers_count: agentStreamConfig.ice_servers.length,
-        });
-        return agentStreamConfig;
+      // Also fix signaling_url - it contains viewer_id in the path
+      // Extract base URL (e.g., "ws://127.0.0.1:8002/ws/") and replace viewer_id
+      let fixedSignalingUrl = selectedAgentConfig.signaling_url;
+      try {
+        const urlObj = new URL(selectedAgentConfig.signaling_url);
+        const pathParts = urlObj.pathname.split('/');
+        // Replace the last part (viewer_id) with the fixed one
+        if (pathParts.length > 0) {
+          pathParts[pathParts.length - 1] = encodeURIComponent(fixedViewerId);
+          urlObj.pathname = pathParts.join('/');
+          fixedSignalingUrl = urlObj.toString();
+        }
+      } catch (e) {
+        console.error(`[CameraDetailPage] Error fixing signaling_url:`, e);
+        // Fallback: simple string replace
+        fixedSignalingUrl = selectedAgentConfig.signaling_url.replace(
+          encodeURIComponent(selectedAgentConfig.viewer_id),
+          encodeURIComponent(fixedViewerId)
+        );
       }
       
-      console.log(`[CameraDetailPage] ⚠️ Agent stream_config missing required fields:`, {
-        has_signaling_url: !!agentStreamConfig.signaling_url,
-        has_viewer_id: !!agentStreamConfig.viewer_id,
-        has_ice_servers: !!agentStreamConfig.ice_servers,
+      console.warn(`[CameraDetailPage] Fixed agent config format:`, {
+        original_viewer_id: selectedAgentConfig.viewer_id,
+        fixed_viewer_id: fixedViewerId,
+        original_signaling_url: selectedAgentConfig.signaling_url,
+        fixed_signaling_url: fixedSignalingUrl,
+        note: 'Backend API should return correct format: viewer:user:camera:agent'
+      });
+      
+      fixedAgentConfig = {
+        ...selectedAgentConfig,
+        viewer_id: fixedViewerId,
+        signaling_url: fixedSignalingUrl
+      };
+    } else {
+      // Already correct format (4 parts: viewer:user:camera:agent)
+      fixedAgentConfig = selectedAgentConfig;
+    }
+  }
+  
+  const isValidAgentConfig = fixedAgentConfig && 
+    fixedAgentConfig.signaling_url && 
+    fixedAgentConfig.viewer_id && 
+    fixedAgentConfig.ice_servers;
+  
+  // Debug logging for agent config
+  useEffect(() => {
+    if (selectedAgent && fixedAgentConfig) {
+      console.log(`[CameraDetailPage] Agent ${selectedAgent.id} (${selectedAgent.name}) config:`, {
+        viewer_id: fixedAgentConfig.viewer_id,
+        signaling_url: fixedAgentConfig.signaling_url,
+        agent_id: selectedAgent.id,
+        camera_id: camera?.id,
       });
     }
+  }, [selectedAgent, fixedAgentConfig, camera?.id]);
+  
+  const agentWebRTC = useWebRTC(
+    isValidAgentConfig && selectedAgent ? fixedAgentConfig : null,
+    selectedAgent ? `agent-${selectedAgent.id}` : undefined
+  );
+  
+  // Determine which stream to use
+  const activeWebRTC = selectedAgent && isValidAgentConfig ? agentWebRTC : cameraWebRTC;
+  const useWebRTCStream = selectedAgent && isValidAgentConfig ? isValidAgentConfig : isValidCameraConfig;
+  
+  // Determine if stream is live
+  const isLive = useWebRTCStream 
+    ? activeWebRTC.connectionState === 'connected' && activeWebRTC.videoStream !== null
+    : camera?.stream_url && camera.stream_url.trim() !== '';
+  
+  // Get connection status
+  const getConnectionStatus = () => {
+    if (!useWebRTCStream) return null;
     
-    // Fall back to camera's default config
-    console.log(`[CameraDetailPage] Using camera default stream config`);
-    return webrtcConfig || streamConfig?.webrtc_config || null;
+    if (activeWebRTC.connectionState === 'connected') {
+      return { icon: Wifi, color: 'text-green-500', text: 'Connected' };
+    } else if (activeWebRTC.connectionState === 'connecting') {
+      return { icon: Wifi, color: 'text-yellow-500', text: 'Connecting...' };
+    } else if (activeWebRTC.connectionState === 'failed' || activeWebRTC.error) {
+      return { icon: AlertCircle, color: 'text-red-500', text: 'Failed' };
+    } else if (activeWebRTC.connectionState === 'disconnected') {
+      return { icon: WifiOff, color: 'text-gray-500', text: 'Disconnected' };
+    }
+    return null;
   };
 
-  const activeWebRTCConfig = getActiveWebRTCConfig();
-  
-  // Validate WebRTC config if it exists
-  const isValidWebRTCConfig = activeWebRTCConfig && 
-    activeWebRTCConfig.signaling_url && 
-    activeWebRTCConfig.viewer_id && 
-    activeWebRTCConfig.ice_servers;
-  
-  const useWebRTCStream = !!activeWebRTCConfig && isValidWebRTCConfig;
-  
-  // Use WebRTC hook with camera ID for persistent connection
-  // Use activeWebRTCConfig which switches between camera and agent config
-  const webrtc = useWebRTC(
-    useWebRTCStream ? activeWebRTCConfig! : null,
-    camera?.id
-  );
+  const connectionStatus = getConnectionStatus();
   
   // Reset selected agent when camera changes
   useEffect(() => {
@@ -98,15 +167,14 @@ function CameraDetailPage({ camera, theme, onBack }) {
   }, [camera?.id]);
   
   // Reattach video stream when video element is remounted or stream source changes
-  // This ensures the stream continues playing even when the layout changes or agent selection changes
   useEffect(() => {
-    if (useWebRTCStream && webrtc.videoStream && webrtc.videoRef.current) {
-      const videoElement = webrtc.videoRef.current;
+    if (useWebRTCStream && activeWebRTC.videoStream && activeWebRTC.videoRef.current) {
+      const videoElement = activeWebRTC.videoRef.current;
       
       // Only update if srcObject is different or null
-      if (videoElement.srcObject !== webrtc.videoStream) {
-        console.log(`[CameraDetailPage] Reattaching video stream (layout or stream source changed)`);
-        videoElement.srcObject = webrtc.videoStream;
+      if (videoElement.srcObject !== activeWebRTC.videoStream) {
+        console.log(`[CameraDetailPage] Reattaching video stream (stream source changed)`);
+        videoElement.srcObject = activeWebRTC.videoStream;
         videoElement.play().then(() => {
           console.log(`[CameraDetailPage] Video stream reattached successfully`);
         }).catch(e => {
@@ -114,30 +182,18 @@ function CameraDetailPage({ camera, theme, onBack }) {
         });
       }
     }
-  }, [useWebRTCStream, webrtc.videoStream, webrtc.videoRef, isChatbotOpen, selectedAgentId]); // Reattach when chatbot state or agent selection changes
+  }, [useWebRTCStream, activeWebRTC.videoStream, activeWebRTC.videoRef, selectedAgentId]);
   
-  // Determine if stream is live
-  const isLive = useWebRTCStream 
-    ? webrtc.connectionState === 'connected' && webrtc.videoStream !== null
-    : camera?.stream_url && camera.stream_url.trim() !== '';
-  
-  // Get connection status
-  const getConnectionStatus = () => {
-    if (!useWebRTCStream) return null;
-    
-    if (webrtc.connectionState === 'connected') {
-      return { icon: Wifi, color: 'text-green-500', text: 'Connected' };
-    } else if (webrtc.connectionState === 'connecting') {
-      return { icon: Wifi, color: 'text-yellow-500', text: 'Connecting...' };
-    } else if (webrtc.connectionState === 'failed' || webrtc.error) {
-      return { icon: AlertCircle, color: 'text-red-500', text: 'Failed' };
-    } else if (webrtc.connectionState === 'disconnected') {
-      return { icon: WifiOff, color: 'text-gray-500', text: 'Disconnected' };
+  // Get stream label for display
+  const getStreamLabel = () => {
+    if (selectedAgent) {
+      return `Agent: ${selectedAgent.name}`;
     }
-    return null;
+    return camera.name;
   };
-
-  const connectionStatus = getConnectionStatus();
+  
+  // Get the selected agent's zone to display
+  const displayZone = selectedAgent?.zone || null;
 
   // Fetch agents when camera changes
   useEffect(() => {
@@ -203,6 +259,12 @@ function CameraDetailPage({ camera, theme, onBack }) {
     } else {
       setSelectedAgentId(agent.id);
       console.log(`[CameraDetailPage] Selected agent ${agent.name} (${agent.id}), switching to agent stream`);
+      if (agent.stream_config) {
+        console.log(`[CameraDetailPage] Agent stream config:`, {
+          viewer_id: agent.stream_config.viewer_id,
+          signaling_url: agent.stream_config.signaling_url,
+        });
+      }
     }
   };
 
@@ -219,7 +281,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
   // Function to initiate zone drawing (called from chatbot)
   const startZoneDrawing = (zoneName: string, agentId?: string | null) => {
     setPendingZoneName(zoneName);
-    setPendingAgentId(agentId || null);
+    setPendingAgentId(agentId ?? null);
     setIsZoneDrawingMode(true);
   };
   
@@ -255,16 +317,8 @@ function CameraDetailPage({ camera, theme, onBack }) {
     setPendingAgentId(null);
   };
   
-  // Get the selected agent's zone to display
-  const displayZone = selectedAgent?.zone || null;
-  
-  // Determine stream label for display
-  const getStreamLabel = () => {
-    if (selectedAgent) {
-      return `Agent: ${selectedAgent.name}`;
-    }
-    return camera.name;
-  };
+  // Note: Zones are still supported per agent, but we're not displaying them on the main stream anymore
+  // This can be enhanced later if needed
 
   return (
     // Fixed height container - no page scrolling
@@ -506,19 +560,43 @@ function CameraDetailPage({ camera, theme, onBack }) {
                         : 'bg-white border border-gray-200'
                     }`}
                   >
-                    {/* Video player - full width with overlay header */}
-                    <div className="flex-1 bg-gray-900 relative overflow-hidden min-h-0">
+                    {/* Camera info header */}
+                    <div className="p-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/20">
+                          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                          <span className="text-red-500 text-xs">LIVE</span>
+                        </div>
+                        <div>
+                          <h2 className={`text-sm ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+                            {getStreamLabel()}
+                          </h2>
+                          <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                            <MapPin className="w-3 h-3" />
+                            <span>{camera.location}</span>
+                            {selectedAgent && (
+                              <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/20 text-blue-500 text-xs">
+                                Agent Stream
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Video player - fills remaining space, scales properly */}
+                    <div className="flex-1 bg-gray-900 relative overflow-hidden">
                       {useWebRTCStream ? (
                         <>
                           <video
-                            ref={webrtc.videoRef}
+                            ref={activeWebRTC.videoRef}
                             className="w-full h-full object-contain"
                             autoPlay
                             muted
                             playsInline
                             controls
                           />
-                          {webrtc.connectionState !== 'connected' && connectionStatus && (
+                          {activeWebRTC.connectionState !== 'connected' && connectionStatus && (
                             <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
                               <div className="text-center">
                                 {(() => {
@@ -528,9 +606,9 @@ function CameraDetailPage({ camera, theme, onBack }) {
                                 <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
                                   {connectionStatus.text}
                                 </p>
-                                {webrtc.error && (
+                                {activeWebRTC.error && (
                                   <p className={`text-xs mt-1 ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
-                                    {webrtc.error}
+                                    {activeWebRTC.error}
                                   </p>
                                 )}
                               </div>
@@ -559,39 +637,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
                           </span>
                         </div>
                       )}
-                      
-                      {/* Camera info header overlay */}
-                      <div className="absolute top-0 left-0 right-0 p-4 z-20 pointer-events-none">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3 pointer-events-auto">
-                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-sm">
-                              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                              <span className="text-red-500 text-xs font-medium">LIVE</span>
-                            </div>
-                            <div className="px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur-sm">
-                              <h2 className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-white'}`}>
-                                {getStreamLabel()}
-                              </h2>
-                              <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-200'}`}>
-                                <MapPin className="w-3 h-3" />
-                                <span>{camera.location}</span>
-                                {selectedAgent && (
-                                  <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/30 text-blue-300 text-xs">
-                                    Agent Stream
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      
                       {displayZone && <ZoneOverlay zone={displayZone} />}
-                    </div>
-                    
-                    {/* Timeline Chart - below video */}
-                    <div className="flex-shrink-0 mt-2">
-                      <TimelineChart theme={theme} />
                     </div>
                   </div>
                 )}
@@ -677,7 +723,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
                               : 'bg-gray-50 border border-gray-200 hover:border-blue-500 hover:shadow-[0_0_15px_rgba(59,130,246,0.3)]'
                           }`}
                         >
-                          {/* Agent info - no toggle */}
+                          {/* Agent info */}
                           <div className="mb-1.5">
                             <h4 className={`text-sm mb-1 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
                               {agent.name}
@@ -746,19 +792,43 @@ function CameraDetailPage({ camera, theme, onBack }) {
                     : 'bg-white border border-gray-200'
                 }`}
               >
-                {/* Video player - full width with overlay header */}
-                <div className="flex-1 bg-gray-900 relative overflow-hidden min-h-0">
+                {/* Camera info header */}
+                <div className="p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/20">
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                      <span className="text-red-500 text-xs">LIVE</span>
+                    </div>
+                    <div>
+                      <h2 className={`text-sm ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+                        {getStreamLabel()}
+                      </h2>
+                      <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                        <MapPin className="w-3 h-3" />
+                        <span>{camera.location}</span>
+                        {selectedAgent && (
+                          <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/20 text-blue-500 text-xs">
+                            Agent Stream
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Video player - fills remaining space */}
+                <div className="flex-1 bg-gray-900 relative overflow-hidden">
                   {useWebRTCStream ? (
                     <>
                       <video
-                        ref={webrtc.videoRef}
-                        className="w-full h-full object-contain"
+                        ref={activeWebRTC.videoRef}
+                        className="w-full h-full object-cover"
                         autoPlay
                         muted
                         playsInline
                         controls
                       />
-                      {webrtc.connectionState !== 'connected' && connectionStatus && (
+                      {activeWebRTC.connectionState !== 'connected' && connectionStatus && (
                         <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
                           <div className="text-center">
                             {(() => {
@@ -768,9 +838,9 @@ function CameraDetailPage({ camera, theme, onBack }) {
                             <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
                               {connectionStatus.text}
                             </p>
-                            {webrtc.error && (
+                            {activeWebRTC.error && (
                               <p className={`text-xs mt-1 ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
-                                {webrtc.error}
+                                {activeWebRTC.error}
                               </p>
                             )}
                           </div>
@@ -779,7 +849,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
                     </>
                   ) : camera?.stream_url && camera.stream_url.trim() !== '' ? (
                     <video
-                      className="w-full h-full object-contain"
+                      className="w-full h-full object-cover"
                       autoPlay
                       loop
                       muted
@@ -797,46 +867,14 @@ function CameraDetailPage({ camera, theme, onBack }) {
                       <span className={`text-sm mb-2 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
                         No stream available
                       </span>
-                      {useWebRTCStream && !isValidWebRTCConfig && (
+                      {useWebRTCStream && !isValidAgentConfig && !isValidCameraConfig && (
                         <span className={`text-xs ${theme === 'dark' ? 'text-yellow-500' : 'text-yellow-600'}`}>
                           WebRTC configuration is incomplete or invalid
                         </span>
                       )}
                     </div>
                   )}
-                  
-                  {/* Camera info header overlay */}
-                  <div className="absolute top-0 left-0 right-0 p-4 z-20 pointer-events-none">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3 pointer-events-auto">
-                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-sm">
-                          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                          <span className="text-red-500 text-xs font-medium">LIVE</span>
-                        </div>
-                        <div className="px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur-sm">
-                          <h2 className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-white'}`}>
-                            {getStreamLabel()}
-                          </h2>
-                          <div className={`flex items-center gap-1 text-xs ${theme === 'dark' ? 'text-gray-300' : 'text-gray-200'}`}>
-                            <MapPin className="w-3 h-3" />
-                            <span>{camera.location}</span>
-                            {selectedAgent && (
-                              <span className="ml-2 px-2 py-0.5 rounded bg-blue-500/30 text-blue-300 text-xs">
-                                Agent Stream
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  
                   {displayZone && <ZoneOverlay zone={displayZone} />}
-                </div>
-                
-                {/* Timeline Chart - below video */}
-                <div className="flex-shrink-0 mt-2">
-                  <TimelineChart theme={theme} />
                 </div>
               </div>
             </div>

@@ -14,6 +14,7 @@ export interface ZoneData {
 export interface ChatMessageRequest {
   message: string;
   session_id?: string;
+  camera_id?: string; // Camera ID for agent creation
   zone_data?: ZoneData; // NEW: Zone data from UI
 }
 
