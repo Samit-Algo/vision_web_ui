@@ -5,6 +5,7 @@ import { Resizable } from 're-resizable';
 import AgentChatbot, { type AgentChatbotRef } from './AgentChatbot';
 import ZoneDrawingPanel from './ZoneDrawingPanel';
 import ZoneOverlay from './ZoneOverlay';
+import TimelineChart from './TimelineChart';
 import { useWebRTC } from '../hooks/useWebRTC';
 import type { StreamConfig, WebRTCConfig } from '../types/cameraTypes';
 import { listAgentsByCamera } from '../services/agent/agentService';
@@ -245,6 +246,12 @@ function CameraDetailPage({ camera, theme, onBack }) {
   // State for panel widths (in pixels)
   const [leftPanelWidth, setLeftPanelWidth] = useState(240);
   const [rightPanelWidth, setRightPanelWidth] = useState(600);
+
+  // State for timeline current time (real-time)
+  const [localCurrentTime, setLocalCurrentTime] = useState(() => {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+  });
 
   // Ref for chatbot to send zone data
   const chatbotRef = useRef<AgentChatbotRef>(null);
@@ -554,7 +561,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
                 ) : (
                   // Normal Live Feed Mode
                   <div
-                    className={`rounded-lg flex flex-col h-full ${
+                    className={`rounded-lg flex flex-col h-full overflow-hidden ${
                       theme === 'dark'
                         ? 'bg-[#1a2332] border border-gray-800'
                         : 'bg-white border border-gray-200'
@@ -584,60 +591,81 @@ function CameraDetailPage({ camera, theme, onBack }) {
                       </div>
                     </div>
 
-                    {/* Video player - fills remaining space, scales properly */}
-                    <div className="flex-1 bg-gray-900 relative overflow-hidden">
-                      {useWebRTCStream ? (
-                        <>
+                    {/* Video player with timeline inside */}
+                    <div className="flex-1 bg-gray-900 relative overflow-hidden flex flex-col">
+                      {/* Video container - maintains aspect ratio */}
+                      <div className="flex-1 flex items-center justify-center bg-gray-900 relative overflow-hidden">
+                        {useWebRTCStream ? (
+                          <>
+                            <video
+                              ref={activeWebRTC.videoRef}
+                              className="max-w-full max-h-full w-auto h-auto"
+                              autoPlay
+                              muted
+                              playsInline
+                              controls
+                            />
+                            {activeWebRTC.connectionState !== 'connected' && connectionStatus && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
+                                <div className="text-center">
+                                  {(() => {
+                                    const IconComponent = connectionStatus.icon;
+                                    return <IconComponent className={`w-12 h-12 mx-auto mb-2 ${connectionStatus.color}`} />;
+                                  })()}
+                                  <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                                    {connectionStatus.text}
+                                  </p>
+                                  {activeWebRTC.error && (
+                                    <p className={`text-xs mt-1 ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
+                                      {activeWebRTC.error}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        ) : camera?.stream_url && camera.stream_url.trim() !== '' ? (
                           <video
-                            ref={activeWebRTC.videoRef}
-                            className="w-full h-full object-contain"
+                            className="max-w-full max-h-full w-auto h-auto"
                             autoPlay
+                            loop
                             muted
                             playsInline
                             controls
-                          />
-                          {activeWebRTC.connectionState !== 'connected' && connectionStatus && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
-                              <div className="text-center">
-                                {(() => {
-                                  const IconComponent = connectionStatus.icon;
-                                  return <IconComponent className={`w-12 h-12 mx-auto mb-2 ${connectionStatus.color}`} />;
-                                })()}
-                                <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                                  {connectionStatus.text}
-                                </p>
-                                {activeWebRTC.error && (
-                                  <p className={`text-xs mt-1 ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
-                                    {activeWebRTC.error}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      ) : camera?.stream_url && camera.stream_url.trim() !== '' ? (
-                        <video
-                          className="w-full h-full object-contain"
-                          autoPlay
-                          loop
-                          muted
-                          playsInline
-                          controls
-                        >
-                          <source
-                            src={camera.stream_url}
-                            type="video/mp4"
-                          />
-                          Your browser does not support the video tag.
-                        </video>
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <span className={`text-sm ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
-                            No stream available
-                          </span>
-                        </div>
-                      )}
-                      {displayZone && <ZoneOverlay zone={displayZone} />}
+                          >
+                            <source
+                              src={camera.stream_url}
+                              type="video/mp4"
+                            />
+                            Your browser does not support the video tag.
+                          </video>
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <span className={`text-sm ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+                              No stream available
+                            </span>
+                          </div>
+                        )}
+                        {displayZone && <ZoneOverlay zone={displayZone} />}
+                      </div>
+
+                      {/* Timeline Chart - Inside video container, below video, flush with bottom */}
+                      <div className="flex-shrink-0 bg-gray-900" style={{ height: '180px', marginTop: 'auto' }}>
+                        <TimelineChart
+                          theme={theme}
+                          cameraId={camera?.id || ''}
+                          agents={agents.map(agent => ({
+                            id: agent.id.toString(),
+                            name: agent.name,
+                            camera_id: camera?.id || '',
+                            model: agent.model,
+                            status: agent.isActive ? 'ACTIVE' : 'INACTIVE',
+                            stream_config: agent.stream_config,
+                          }))}
+                          currentTime={localCurrentTime}
+                          onTimeChange={(time) => setLocalCurrentTime(time)}
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
@@ -786,7 +814,7 @@ function CameraDetailPage({ camera, theme, onBack }) {
             {/* Right side - Camera feed - fixed height */}
             <div className="flex-1 flex flex-col overflow-hidden">
               <div
-                className={`rounded-lg flex flex-col h-full ${
+                className={`rounded-lg flex flex-col h-full overflow-hidden ${
                   theme === 'dark'
                     ? 'bg-[#1a2332] border border-gray-800'
                     : 'bg-white border border-gray-200'
@@ -816,65 +844,86 @@ function CameraDetailPage({ camera, theme, onBack }) {
                   </div>
                 </div>
 
-                {/* Video player - fills remaining space */}
-                <div className="flex-1 bg-gray-900 relative overflow-hidden">
-                  {useWebRTCStream ? (
-                    <>
+                {/* Video player with timeline inside */}
+                <div className="flex-1 bg-gray-900 relative overflow-hidden flex flex-col">
+                  {/* Video container - maintains aspect ratio */}
+                  <div className="flex-1 flex items-center justify-center bg-gray-900 relative overflow-hidden">
+                    {useWebRTCStream ? (
+                      <>
+                        <video
+                          ref={activeWebRTC.videoRef}
+                          className="max-w-full max-h-full w-auto h-auto"
+                          autoPlay
+                          muted
+                          playsInline
+                          controls
+                        />
+                        {activeWebRTC.connectionState !== 'connected' && connectionStatus && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
+                            <div className="text-center">
+                              {(() => {
+                                const IconComponent = connectionStatus.icon;
+                                return <IconComponent className={`w-12 h-12 mx-auto mb-2 ${connectionStatus.color}`} />;
+                              })()}
+                              <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
+                                {connectionStatus.text}
+                              </p>
+                              {activeWebRTC.error && (
+                                <p className={`text-xs mt-1 ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
+                                  {activeWebRTC.error}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : camera?.stream_url && camera.stream_url.trim() !== '' ? (
                       <video
-                        ref={activeWebRTC.videoRef}
-                        className="w-full h-full object-cover"
+                        className="max-w-full max-h-full w-auto h-auto"
                         autoPlay
+                        loop
                         muted
                         playsInline
                         controls
-                      />
-                      {activeWebRTC.connectionState !== 'connected' && connectionStatus && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
-                          <div className="text-center">
-                            {(() => {
-                              const IconComponent = connectionStatus.icon;
-                              return <IconComponent className={`w-12 h-12 mx-auto mb-2 ${connectionStatus.color}`} />;
-                            })()}
-                            <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
-                              {connectionStatus.text}
-                            </p>
-                            {activeWebRTC.error && (
-                              <p className={`text-xs mt-1 ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
-                                {activeWebRTC.error}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  ) : camera?.stream_url && camera.stream_url.trim() !== '' ? (
-                    <video
-                      className="w-full h-full object-cover"
-                      autoPlay
-                      loop
-                      muted
-                      playsInline
-                      controls
-                    >
-                      <source
-                        src={camera.stream_url}
-                        type="video/mp4"
-                      />
-                      Your browser does not support the video tag.
-                    </video>
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center">
-                      <span className={`text-sm mb-2 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
-                        No stream available
-                      </span>
-                      {useWebRTCStream && !isValidAgentConfig && !isValidCameraConfig && (
-                        <span className={`text-xs ${theme === 'dark' ? 'text-yellow-500' : 'text-yellow-600'}`}>
-                          WebRTC configuration is incomplete or invalid
+                      >
+                        <source
+                          src={camera.stream_url}
+                          type="video/mp4"
+                        />
+                        Your browser does not support the video tag.
+                      </video>
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center">
+                        <span className={`text-sm mb-2 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>
+                          No stream available
                         </span>
-                      )}
-                    </div>
-                  )}
-                  {displayZone && <ZoneOverlay zone={displayZone} />}
+                        {useWebRTCStream && !isValidAgentConfig && !isValidCameraConfig && (
+                          <span className={`text-xs ${theme === 'dark' ? 'text-yellow-500' : 'text-yellow-600'}`}>
+                            WebRTC configuration is incomplete or invalid
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {displayZone && <ZoneOverlay zone={displayZone} />}
+                  </div>
+
+                  {/* Timeline Chart - Inside video container, below video, flush with bottom */}
+                  <div className="flex-shrink-0 bg-gray-900" style={{ height: '180px', marginTop: 'auto' }}>
+                    <TimelineChart
+                      theme={theme}
+                      cameraId={camera?.id || ''}
+                      agents={agents.map(agent => ({
+                        id: agent.id.toString(),
+                        name: agent.name,
+                        camera_id: camera?.id || '',
+                        model: agent.model,
+                        status: agent.isActive ? 'ACTIVE' : 'INACTIVE',
+                        stream_config: agent.stream_config,
+                      }))}
+                      currentTime={localCurrentTime}
+                      onTimeChange={(time) => setLocalCurrentTime(time)}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
